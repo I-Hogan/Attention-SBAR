@@ -1,6 +1,6 @@
 # Skeleton Based Activity Recognition using Attention 
 #
-# Version Num: 0.0
+# Version Num: 0.0.1
 #
 # Isaac Hogan
 # 14iach@queensu.ca
@@ -273,11 +273,12 @@ class AttentionNetwork(tf.keras.layers.Layer):
 		self.model.build(batch_shape)
 		self.model.summary()
 		
-	def train(self, epoch_num, epoch_steps):
+	def train(self, epoch_num, epoch_steps, callback=None):
 	
 		self.model.fit(
 		x_train.astype(np.float32), y_train.astype(np.float32),
 		epochs=epoch_num,
+		callbacks=[callback],
 		steps_per_epoch=epoch_steps,
 		validation_data=(x_test.astype(np.float32), y_test.astype(np.float32)),
 		validation_freq=1
@@ -288,11 +289,11 @@ DATA_FILE = '../nturgb_d_npy/'
 SEED = 1
 TRIAN_SIZE = 0.8
 TEST_SIZE = 0.2
-PAD_CLIP_LENGTH = 256
+PAD_CLIP_LENGTH = 128
 
 EPCOHS = 100
-BATCH_SIZE = 4#128
-LEARNING_RATE = 1e-4
+BATCH_SIZE = 8#128
+LEARNING_RATE = 1e-5
 
 MLP_UNITS = 1000
 
@@ -304,6 +305,9 @@ PARAMETERS = 256
 OPTIMIZER = tf.keras.optimizers.Adam(learning_rate=LEARNING_RATE)
 INITIALIZER = tf.keras.initializers.GlorotUniform(SEED)
 ACTIVATION_F =  tf.nn.relu
+
+checkpoint_path = "checkpoints_1/cp-{epoch:04d}.ckpt"
+checkpoint_dir = os.path.dirname(checkpoint_path)
 
 
 # ---------- Flags ----------
@@ -333,6 +337,12 @@ y_test = np.array(y_test) - 1
 x_train = np.reshape(x_train, (-1,x_train.shape[1],x_train.shape[2]*x_train.shape[3]))
 x_test = np.reshape(x_test, (-1,x_test.shape[1],x_test.shape[2]*x_test.shape[3]))
 
+#small sets
+x_train = x_train[-64:]
+x_test = x_test[-64:]
+y_train = y_train[-64:]
+y_test = y_test[-64:]
+
 print(x_train.shape, x_test.shape, y_train.shape, y_test.shape)
 
 EPOCH_STEPS = 	math.floor(x_train.shape[0]/BATCH_SIZE)
@@ -342,10 +352,18 @@ BATCH_SHAPE =   tuple([BATCH_SIZE,x_train.shape[1],x_train.shape[2]])#(int(x_tra
 
 # ---------- Training ----------
 
+cp_callback = tf.keras.callbacks.ModelCheckpoint(
+    filepath=checkpoint_path, 
+    verbose=1, 
+    save_weights_only=True,
+    period=5)
+
 network = AttentionNetwork(BATCH_SHAPE, BLOCK_SIZE, MLP_UNITS, BLOCK_SIZE, \
 			PARAMETERS, HEADS, activation=ACTIVATION_F, skip_connections=True)
 			
-network.train(EPCOHS, EPOCH_STEPS)
+network.model.save_weights(checkpoint_path.format(epoch=0))
+			
+network.train(EPCOHS, EPOCH_STEPS, callback=cp_callback)
 
 
 
