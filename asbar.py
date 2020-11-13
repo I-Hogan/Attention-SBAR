@@ -1,6 +1,6 @@
 # Skeleton Based Activity Recognition using Attention 
 #
-# Version Num: 0.0.2
+# Version Num: 0.0.4
 #
 # Isaac Hogan
 # 14iach@queensu.ca
@@ -53,7 +53,7 @@ def add_class(set):
 		c_num = int(set[i]['file_name'][-3:])
 		set[i]['class_num'] = c_num
 		
-def load_data(data_file, train_size=0.8, test_size=0.2, first_classes=False, single_pose=False):
+def load_ntu(data_file, train_size=0.8, test_size=0.2, evaluation_mode="default", first_classes=False, single_pose=False):
 	"""
 	Creates a training set and a testing set from the numpy-converted NTU RGB+D Skeleton dataset
 
@@ -84,33 +84,42 @@ def load_data(data_file, train_size=0.8, test_size=0.2, first_classes=False, sin
 		num_classes = 5
 		for i in range(num_classes):
 			files = files + [f for f in glob.glob(data_file + '*A00' + str(i + 1) + '*')]
-			
-	random.shuffle(files)
+	
+	if evaluation_mode == "default":
 
-	train_samples = math.floor(len(files)*train_size)
-	test_samples = math.floor(len(files)*test_size)
+		random.shuffle(files)
 
-	prev_sampels = 0
+		train_samples = math.floor(len(files)*train_size)
+		test_samples = math.floor(len(files)*test_size)
 
-	#creates the training set
-	for i in range(train_samples):
-		sample = np.load(files[i+prev_sampels],allow_pickle=True).item()
-		if single_pose:
-			if check_sample(sample):
+		prev_sampels = 0
+
+		#creates the training set
+		for i in range(train_samples):
+			sample = np.load(files[i+prev_sampels],allow_pickle=True).item()
+			if single_pose:
+				if check_sample(sample):
+					train_set.append(sample)
+			else:
 				train_set.append(sample)
-		else:
-			train_set.append(sample)
-	prev_sampels += train_samples
+		prev_sampels += train_samples
 
-	#creates the test set
-	for i in range(test_samples):
-		sample = np.load(files[i+prev_sampels],allow_pickle=True).item()
-		if single_pose:
-			if check_sample(sample):
+		#creates the test set
+		for i in range(test_samples):
+			sample = np.load(files[i+prev_sampels],allow_pickle=True).item()
+			if single_pose:
+				if check_sample(sample):
+					test_set.append(sample)
+			else:
 				test_set.append(sample)
-		else:
-			test_set.append(sample)
-	prev_sampels += test_samples
+		prev_sampels += test_samples
+
+	#elif evaluation_mode == "cv":
+		
+
+	else:
+		print(evaluation_mode, "is invalid evaluation mode")
+		print("options: default, cv, cs")
 
 	add_class(train_set)
 	add_class(test_set)
@@ -264,6 +273,7 @@ class AttentionNetwork():
 					activation=activation, skip_connection=skip_connections))
 			self.model.add(tf.keras.layers.Dropout(DROPOUT))
 			self.model.add(MyDenseLayer(block_size, activation=activation, skip_connection=skip_connections))
+			self.model.add(tf.keras.layers.Dropout(DROPOUT))
 		#self.model.add(MyDenseLayer(REDUCE_UNITS))
 		#self.model.add(tf.keras.layers.Reshape((SET_SIZE*REDUCE_UNITS,)))
 		self.model.add(FeatureSumLayer())
@@ -303,13 +313,13 @@ TEST_SIZE = 0.2
 PAD_CLIP_LENGTH = 128
 
 EPCOHS = 100
-BATCH_SIZE = 128
-LEARNING_RATE = 1e-4
+BATCH_SIZE = 32
+LEARNING_RATE = 1e-5
 DROPOUT = 0.1
 
 MLP_UNITS = 256
 
-BLOCK_SIZE = 128
+BLOCK_SIZE = 256
 LAYERS = 8
 HEADS = 6
 PARAMETERS = 128
@@ -318,13 +328,14 @@ OPTIMIZER = tf.keras.optimizers.Adam(learning_rate=LEARNING_RATE)
 INITIALIZER = tf.keras.initializers.GlorotUniform(SEED)
 ACTIVATION_F =  tf.nn.relu
 
+
 checkpoint_path = "checkpoints_1/cp-{epoch:04d}.ckpt"
 checkpoint_dir = os.path.dirname(checkpoint_path)
 
 
 # ---------- Flags ----------
 
-LOAD_MODEL = True
+LOAD_MODEL = False
 SCALE_CLIPS = True
 SINGLE_POSE = False
 FIRST_CLASSES = False
@@ -333,7 +344,9 @@ FIRST_CLASSES = False
 # ---------- Setup ----------
 
 random.seed(SEED)
-train_set, test_set = load_data(DATA_FILE, train_size=TRIAN_SIZE, test_size=TEST_SIZE, first_classes=FIRST_CLASSES, single_pose=SINGLE_POSE)
+train_set, test_set = load_ntu(DATA_FILE, train_size=TRIAN_SIZE, test_size=TEST_SIZE, first_classes=FIRST_CLASSES, single_pose=SINGLE_POSE)
+
+
 x_train, y_train = get_vals_labels(train_set)
 x_test, y_test = get_vals_labels(test_set)
 
