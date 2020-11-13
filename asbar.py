@@ -53,7 +53,7 @@ def add_class(set):
 		c_num = int(set[i]['file_name'][-3:])
 		set[i]['class_num'] = c_num
 		
-def load_data(data_file, train_size=0.8, test_size=0.2, first_classes=False):
+def load_data(data_file, train_size=0.8, test_size=0.2, first_classes=False, single_pose=False):
 	"""
 	Creates a training set and a testing set from the numpy-converted NTU RGB+D Skeleton dataset
 
@@ -95,14 +95,20 @@ def load_data(data_file, train_size=0.8, test_size=0.2, first_classes=False):
 	#creates the training set
 	for i in range(train_samples):
 		sample = np.load(files[i+prev_sampels],allow_pickle=True).item()
-		if check_sample(sample):
+		if single_pose:
+			if check_sample(sample):
+				train_set.append(sample)
+		else:
 			train_set.append(sample)
 	prev_sampels += train_samples
 
 	#creates the test set
 	for i in range(test_samples):
 		sample = np.load(files[i+prev_sampels],allow_pickle=True).item()
-		if check_sample(sample):
+		if single_pose:
+			if check_sample(sample):
+				test_set.append(sample)
+		else:
 			test_set.append(sample)
 	prev_sampels += test_samples
 
@@ -255,9 +261,9 @@ class AttentionNetwork():
 		for layer in range(LAYERS):
 			#self.model.add(tf.keras.layers.Dropout(.2))
 			self.model.add(MyMultiAttentionLayer(block_size, param_number, multi_heads, \
-					activation=ACTIVATION_F, skip_connection=skip_connections))
-			self.model.add(tf.keras.layers.Dropout(.2))
-			self.model.add(MyDenseLayer(block_size, activation=ACTIVATION_F, skip_connection=skip_connections))
+					activation=activation, skip_connection=skip_connections))
+			self.model.add(tf.keras.layers.Dropout(DROPOUT))
+			self.model.add(MyDenseLayer(block_size, activation=activation, skip_connection=skip_connections))
 		#self.model.add(MyDenseLayer(REDUCE_UNITS))
 		#self.model.add(tf.keras.layers.Reshape((SET_SIZE*REDUCE_UNITS,)))
 		self.model.add(FeatureSumLayer())
@@ -297,15 +303,16 @@ TEST_SIZE = 0.2
 PAD_CLIP_LENGTH = 128
 
 EPCOHS = 100
-BATCH_SIZE = 8#128
-LEARNING_RATE = 1e-5
+BATCH_SIZE = 128
+LEARNING_RATE = 1e-4
+DROPOUT = 0.1
 
-MLP_UNITS = 1000
+MLP_UNITS = 256
 
-BLOCK_SIZE = 256
+BLOCK_SIZE = 128
 LAYERS = 8
-HEADS = 8
-PARAMETERS = 256
+HEADS = 6
+PARAMETERS = 128
 
 OPTIMIZER = tf.keras.optimizers.Adam(learning_rate=LEARNING_RATE)
 INITIALIZER = tf.keras.initializers.GlorotUniform(SEED)
@@ -319,13 +326,14 @@ checkpoint_dir = os.path.dirname(checkpoint_path)
 
 LOAD_MODEL = True
 SCALE_CLIPS = True
-SINGLE_POSE = True
+SINGLE_POSE = False
+FIRST_CLASSES = False
 
 
 # ---------- Setup ----------
 
 random.seed(SEED)
-train_set, test_set = load_data(DATA_FILE, train_size=TRIAN_SIZE, test_size=TEST_SIZE, first_classes=False)
+train_set, test_set = load_data(DATA_FILE, train_size=TRIAN_SIZE, test_size=TEST_SIZE, first_classes=FIRST_CLASSES, single_pose=SINGLE_POSE)
 x_train, y_train = get_vals_labels(train_set)
 x_test, y_test = get_vals_labels(test_set)
 
