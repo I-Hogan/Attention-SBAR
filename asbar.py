@@ -1,6 +1,6 @@
 # Skeleton Based Activity Recognition using Attention 
 #
-# Version Num: 0.0.4
+# Version Num: 0.0.5
 #
 # Isaac Hogan
 # 14iach@queensu.ca
@@ -10,7 +10,7 @@
 print("\nloading libraries...")
 
 import numpy as np
-import matplotlib.pyplot as plt
+#import matplotlib.pyplot as plt
 import os
 import sys
 import glob
@@ -164,14 +164,20 @@ class LearnedComplexPosEncoding(tf.keras.layers.Layer):
 	"""
 	Adds a learnable bias to each input.
 	"""
-	def __init__(self):
+	def __init__(self, ignore_zeros=False):
 		super(LearnedComplexPosEncoding, self).__init__()
+		self.ignore_zeros = ignore_zeros
 
 	def build(self, input_shape):
 		self.encodings = self.add_weight("encodings", shape=[1,input_shape[-2],input_shape[-1]])
 
 	def call(self, input):
-		output = input + self.encodings
+		if self.ignore_zeros:
+			max_vals = tf.reduce_max(input, axis=-1, keepdims=True)
+			encodings = (self.encodings * max_vals) / (max_vals + 0.00001)
+		else:
+			encodings = self.encodings
+		output = input + encodings
 		return output
 		
 class FeatureSumLayer(tf.keras.layers.Layer):
@@ -189,11 +195,12 @@ class MyDenseLayer(tf.keras.layers.Layer):
 	"""
 	A dense layer with a skip connection
 	"""
-	def __init__(self, num_outputs, activation=None, skip_connection=False):
+	def __init__(self, num_outputs, activation=None, skip_connection=False, dropout=0.):
 		super(MyDenseLayer, self).__init__()
 		self.num_outputs = num_outputs
 		self.activation = activation
 		self.skip_connection = skip_connection
+		self.dropout = dropout
 
 	def build(self, input_shape):
 		self.p_weights = self.add_weight("p_weights", shape=[self.num_outputs,input_shape[-1]]) 
@@ -204,6 +211,7 @@ class MyDenseLayer(tf.keras.layers.Layer):
 			output = self.activation(tf.matmul(input,tf.transpose(self.p_weights)) + self.p_biases)
 		else:
 			output =  tf.matmul(input,tf.transpose(self.p_weights)) + self.p_biases
+		output = tf.nn.dropout(output, self.dropout)
 		if self.skip_connection:
 			return output + input
 		else:
@@ -213,13 +221,14 @@ class MyMultiAttentionLayer(tf.keras.layers.Layer):
 	"""
 	Multi-head scaled dot-product attention layer
 	"""	
-	def __init__(self, num_outputs, param_number, multi_heads, activation=None, skip_connection=False):
+	def __init__(self, num_outputs, param_number, multi_heads, activation=None, skip_connection=False, dropout=0.):
 		super(MyMultiAttentionLayer, self).__init__()
 		self.num_outputs = num_outputs
 		self.param_number = param_number
 		self.activation = activation
 		self.multi_heads = multi_heads
 		self.skip_connection = skip_connection
+		self.dropout = dropout
 
 	def build(self, input_shape):
 		self.q_weights = self.add_weight("q_weights", shape=[self.multi_heads,self.param_number,input_shape[-1]]) 
@@ -249,8 +258,12 @@ class MyMultiAttentionLayer(tf.keras.layers.Layer):
 
 		output = tf.matmul(concat,tf.transpose(self.l_weights)) + self.l_biases
 
+		output = tf.nn.dropout(output, self.dropout)
+
 		if self.skip_connection:
 			skip_output = output + input
+		else: 
+			skip_output = output
 
 		if self.activation != None:
 			return self.activation(skip_output)
@@ -266,14 +279,12 @@ class AttentionNetwork():
 		
 		self.model = tf.keras.models.Sequential()
 		self.model.add(MyDenseLayer(block_size))
-		self.model.add(LearnedComplexPosEncoding())
+		self.model.add(LearnedComplexPosEncoding(ignore_zeros=True))
 		for layer in range(LAYERS):
 			#self.model.add(tf.keras.layers.Dropout(.2))
 			self.model.add(MyMultiAttentionLayer(block_size, param_number, multi_heads, \
-					activation=activation, skip_connection=skip_connections))
-			self.model.add(tf.keras.layers.Dropout(DROPOUT))
-			self.model.add(MyDenseLayer(block_size, activation=activation, skip_connection=skip_connections))
-			self.model.add(tf.keras.layers.Dropout(DROPOUT))
+					activation=activation, skip_connection=skip_connections, dropout=DROPOUT))
+			self.model.add(MyDenseLayer(block_size, activation=activation, skip_connection=skip_connections, dropout=DROPOUT))
 		#self.model.add(MyDenseLayer(REDUCE_UNITS))
 		#self.model.add(tf.keras.layers.Reshape((SET_SIZE*REDUCE_UNITS,)))
 		self.model.add(FeatureSumLayer())
@@ -312,22 +323,21 @@ TRIAN_SIZE = 0.8
 TEST_SIZE = 0.2
 PAD_CLIP_LENGTH = 128
 
-EPCOHS = 100
+EPCOHS = 1000
 BATCH_SIZE = 32
 LEARNING_RATE = 1e-5
-DROPOUT = 0.1
+DROPOUT = 0.
 
 MLP_UNITS = 256
 
-BLOCK_SIZE = 256
-LAYERS = 8
-HEADS = 6
-PARAMETERS = 128
+BLOCK_SIZE = 128 	# > sample size
+LAYERS = 8			
+HEADS = 6		
+PARAMETERS = 32  	# > block size / heads
 
 OPTIMIZER = tf.keras.optimizers.Adam(learning_rate=LEARNING_RATE)
 INITIALIZER = tf.keras.initializers.GlorotUniform(SEED)
 ACTIVATION_F =  tf.nn.relu
-
 
 checkpoint_path = "checkpoints_1/cp-{epoch:04d}.ckpt"
 checkpoint_dir = os.path.dirname(checkpoint_path)
