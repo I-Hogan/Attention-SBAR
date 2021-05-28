@@ -1,6 +1,6 @@
 # Skeleton Based Activity Recognition using Attention 
 #
-# Version Num: 0.0.5
+# Version Num: 0.0.6
 #
 # Isaac Hogan
 # 14iach@queensu.ca
@@ -158,7 +158,93 @@ def normalize_clip_length(set, new_len):
 			mode='constant', constant_values=0)
 		
 
+def matplotlib_clip_vid(clip):
+	"""
+	show activity clip
+	"""
+	import matplotlib.pyplot as plt
+	from matplotlib.animation import FuncAnimation
+	
+	fig = plt.figure()
+	
+	clip_t = clip.transpose((0,2,1))
+	
+	def update(frame_number):
+		ax = fig.add_subplot(projection='3d')
+		ax.set_xlabel('X')
+		ax.set_ylabel('Y')
+		ax.set_zlabel('Z')
+		scatter = ax.scatter(clip_t[frame_number][0], clip_t[frame_number][1], clip_t[frame_number][2])
+		ax.set_xlim(0,1)
+		ax.set_ylim(0,1)
+		ax.set_zlim(0,1)
+		return scatter
+		
+	ani = FuncAnimation(fig, update, interval=10)
+	plt.show()
+
 # ---------- Classes ----------
+
+class ModifySkeletons(tf.keras.layers.Layer):
+	"""
+	Rotates and scales skeletons by random values
+	"""
+	def __init__(self):
+		super(ModifySkeletons, self).__init__()
+		
+	def call(self, input, max_val=1., min_val=0., training=None):
+	
+		if training:
+			theta = random.uniform(0., 360.)
+			rad = theta*math.pi/180.
+			scale = random.uniform(.5, 2)
+		
+			translate_val = (min_val - max_val) / 2.
+			translate_forward = tf.constant([[1,0,0,translate_val],
+										[0,1,0,translate_val],
+										[0,0,1,translate_val],
+										[0,0,0,1]])	
+			translate_back = tf.constant([[1,0,0,-translate_val],
+										[0,1,0,-translate_val],
+										[0,0,1,-translate_val],
+										[0,0,0,1]])	
+			rotate = tf.constant([[math.cos(rad),-math.sin(rad),0,0],
+								[math.sin(rad),math.cos(rad),0,0],
+								[0,0,1,0],
+								[0,0,0,1]])	
+			scale = tf.constant([[scale,0,0,0],
+								[0,scale,0,0],
+								[0,0,scale,0],
+								[0,0,0,1]])
+								
+			composed = tf.linalg.matmul(tf.linalg.matmul(tf.linalg.matmul( \
+						scale, translate_back), rotate), translate_forward)
+			
+			input_4d = tf.concat([input, tf.ones([input.shape[0],input.shape[1],input.shape[2],1], dtype=tf.dtypes.float32)], axis=-1)
+			translated_4d = tf.reshape(tf.linalg.matmul(composed,tf.expand_dims(input_4d, axis=-1)), [input_4d.shape[0],input_4d.shape[1],input_4d.shape[2],input_4d.shape[3]])
+			translated = tf.slice(translated_4d, [0,0,0,0], [translated_4d.shape[0],translated_4d.shape[1],translated_4d.shape[2],translated_4d.shape[3]-1])
+			
+			#tf.print("translate_forward:\n", composed)
+			#tf.print("rotate:\n", composed)
+			#tf.print("translate_back:\n", composed)
+			#tf.print("composed:\n", composed)
+			#tf.print("input:", input.shape, "\n", input)
+			#tf.print("translated:", translated.shape, "\n", translated)
+			
+			return translated
+		
+		else:
+			return input
+
+class FlattenDims(tf.keras.layers.Layer):
+	"""
+	Adds a learnable bias to each input.
+	"""
+	def __init__(self):
+		super(FlattenDims, self).__init__()
+
+	def call(self, input):
+		return tf.reshape(input, (-1,input.shape[1],input.shape[2]*input.shape[3]))
 
 class LearnedComplexPosEncoding(tf.keras.layers.Layer):
 	"""
@@ -278,15 +364,16 @@ class AttentionNetwork():
 			param_number, multi_heads, activation=tf.nn.relu, skip_connections=True):
 		
 		self.model = tf.keras.models.Sequential()
+		self.model.add(ModifySkeletons())
+		self.model.add(FlattenDims())
 		self.model.add(MyDenseLayer(block_size))
 		self.model.add(LearnedComplexPosEncoding(ignore_zeros=True))
 		for layer in range(LAYERS):
-			#self.model.add(tf.keras.layers.Dropout(.2))
 			self.model.add(MyMultiAttentionLayer(block_size, param_number, multi_heads, \
 					activation=activation, skip_connection=skip_connections, dropout=DROPOUT))
+			self.model.add(tf.keras.layers.LayerNormalization(axis=-1))
 			self.model.add(MyDenseLayer(block_size, activation=activation, skip_connection=skip_connections, dropout=DROPOUT))
-		#self.model.add(MyDenseLayer(REDUCE_UNITS))
-		#self.model.add(tf.keras.layers.Reshape((SET_SIZE*REDUCE_UNITS,)))
+			self.model.add(tf.keras.layers.LayerNormalization(axis=-1))
 		self.model.add(FeatureSumLayer())
 		self.model.add(MyDenseLayer(mlp_hidden))
 		self.model.add(MyDenseLayer(CLASSES))
@@ -324,8 +411,8 @@ TEST_SIZE = 0.2
 PAD_CLIP_LENGTH = 128
 
 EPCOHS = 1000
-BATCH_SIZE = 32
-LEARNING_RATE = 1e-5
+BATCH_SIZE = 4
+LEARNING_RATE = 1e-4
 DROPOUT = 0.
 
 MLP_UNITS = 256
@@ -348,7 +435,7 @@ checkpoint_dir = os.path.dirname(checkpoint_path)
 LOAD_MODEL = False
 SCALE_CLIPS = True
 SINGLE_POSE = False
-FIRST_CLASSES = False
+FIRST_CLASSES = True
 
 
 # ---------- Setup ----------
@@ -356,30 +443,82 @@ FIRST_CLASSES = False
 random.seed(SEED)
 train_set, test_set = load_ntu(DATA_FILE, train_size=TRIAN_SIZE, test_size=TEST_SIZE, first_classes=FIRST_CLASSES, single_pose=SINGLE_POSE)
 
-
 x_train, y_train = get_vals_labels(train_set)
 x_test, y_test = get_vals_labels(test_set)
 
 clip_lengths = [x.shape[0] for x in x_train]
 print("Mean Clip Length:", round(np.mean(clip_lengths),2), "\tShortest Clip Length:", min(clip_lengths), "\tLongest Clip Length:", max(clip_lengths))
 
+#set all clips to the same number of frames
 normalize_clip_length(x_train, PAD_CLIP_LENGTH)
 normalize_clip_length(x_test, PAD_CLIP_LENGTH)
 
+#convert to numpy arrays
 x_train = np.array(x_train)
 x_test = np.array(x_test)
 y_train = np.array(y_train) - 1
 y_test = np.array(y_test) - 1
 
-x_train = np.reshape(x_train, (-1,x_train.shape[1],x_train.shape[2]*x_train.shape[3]))
-x_test = np.reshape(x_test, (-1,x_test.shape[1],x_test.shape[2]*x_test.shape[3]))
+#swap y and z coordinates so z is vertical
+switch_yz_array = [[1,0,0],
+					[0,0,1],
+					[0,1,0]]
+					
+
+print(x_train.shape)
+x_train = np.reshape(np.matmul(switch_yz_array, np.expand_dims(x_train, axis=-1)), x_train.shape)
+print(x_train.shape)
+
+#x_train = np.reshape(x_train, (-1,x_train.shape[1],x_train.shape[2]*x_train.shape[3]))
+#x_test = np.reshape(x_test, (-1,x_test.shape[1],x_test.shape[2]*x_test.shape[3]))
 
 print(x_train.shape, x_test.shape, y_train.shape, y_test.shape)
 
 EPOCH_STEPS = 	math.floor(x_train.shape[0]/BATCH_SIZE)
 CLASSES =       int(np.max(y_train)-np.min(y_train))+1
-BATCH_SHAPE =   tuple([BATCH_SIZE,x_train.shape[1],x_train.shape[2]])#(int(x_train.shape[0]/EPOCH_STEPS),x_train.shape[1],x_train.shape[2])
+BATCH_SHAPE =   tuple([BATCH_SIZE,x_train.shape[1],x_train.shape[2],x_train.shape[3]])#(int(x_train.shape[0]/EPOCH_STEPS),x_train.shape[1],x_train.shape[2])
 
+
+"""# ---------- Aug Tests ----------
+
+import matplotlib.pyplot as plt
+
+#batch = np.array([[1,1,1],
+#					[1,0,0],
+#					[0,1,0],
+#					[0,0,1]], dtype=float)
+
+batch = x_train[0:5]
+
+print("Batch Shape:", batch.shape)
+
+matplotlib_clip_vid(batch[0])
+
+print(batch[0].shape)
+
+mod_skel = ModifySkeletons()
+batch_mod = np.array(mod_skel(batch, training=True))
+
+matplotlib_clip_vid(batch_mod[0])
+
+print(batch_mod[0].shape)
+
+batch_plt = np.transpose(batch_mod[0][0])	
+	
+fig = plt.figure()
+ax = fig.add_subplot(projection='3d')
+ax.set_xlabel('X')
+ax.set_ylabel('Y')
+ax.set_zlabel('Z')
+ax.scatter(batch_plt[0], batch_plt[1], batch_plt[2])		
+ax.set_xlim(0,1)
+ax.set_ylim(0,1)
+ax.set_zlim(0,1)		
+plt.show()
+
+
+_ = 1/0
+"""
 
 # ---------- Training ----------
 
